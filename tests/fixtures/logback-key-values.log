@@ -1,0 +1,11 @@
+2026-10-07 09:30:00.101 [main] INFO  com.example.Application - Starting orders service version=1.8.2 profile=prod
+2026-10-07 09:30:01.204 [main] INFO  com.example.config.ConfigDump - Effective configuration:
+server.port=8080
+spring.datasource.url=jdbc:postgresql://db:5432/orders
+logging.level.root=INFO
+2026-10-07 09:30:02.310 [http-nio-8080-exec-1] INFO  com.example.audit.AuditFilter - user=42 status=ok path=/api/orders
+2026-10-07 09:30:02.415 [http-nio-8080-exec-2] INFO  com.example.audit.AuditFilter - user=43 status=ok path=/api/orders/17
+2026-10-07 09:30:03.020 [http-nio-8080-exec-3] WARN  com.example.audit.AuditFilter - user=44 status=denied path=/api/admin
+2026-10-07 09:30:04.118 [http-nio-8080-exec-4] INFO  com.example.order.OrderService - Order 42 created time=12ms level=standard msg="gift wrap" user=42 status=ok
+2026-10-07 09:30:05.500 [scheduler-1] DEBUG com.example.metrics.Flusher - flushed user=42 status=ok
+2026-10-07 09:30:06.712 [http-nio-8080-exec-5] ERROR com.example.audit.AuditFilter - user=45 status=error path=/api/orders/18

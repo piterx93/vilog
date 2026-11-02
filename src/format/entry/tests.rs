@@ -393,6 +393,41 @@ fn go_frame_without_an_offset_is_an_exception_line() {
     assert!(is("\t/app/cmd/shop/main.go:12"));
 }
 
+/// The unindented half of a Go frame: the function, with the argument words Go
+/// prints in hex, `...` when it leaves them out, and `?` after a value it isn't sure of.
+#[test]
+fn go_function_line_is_an_exception_line() {
+    assert!(is("main.main()"));
+    assert!(is("main.lookup(...)"));
+    assert!(is("main.worker(0xc000012345)"));
+    assert!(is(
+        "github.com/sirupsen/logrus.(*Entry).log(0xc0001b2000, 0x0, {0xc00001c0a0, 0x1b})"
+    ));
+    assert!(is("main.Map[...]({0xc000010000, 0x3, 0x3}, 0x4b2f10)"));
+    assert!(is("panic({0x4a3b20?, 0xc000012345?})"));
+    assert!(is("main.(*List[...]).Push(0xc000010000, 0x1)"));
+    assert!(is("main.(*order_store).Get(0xc000010000)"));
+    assert!(is("main.größe(0x1)"));
+}
+
+#[test]
+fn go_created_by_line_is_an_exception_line() {
+    assert!(is("created by main.main in goroutine 1"));
+    assert!(is("created by net/http.(*Server).Serve"));
+}
+
+#[test]
+fn go_signal_line_is_an_exception_line() {
+    assert!(is(
+        "[signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0x47a8b2]"
+    ));
+}
+
+#[test]
+fn go_elided_frames_line_is_an_exception_line() {
+    assert!(is("...additional frames elided..."));
+}
+
 #[test]
 fn dotnet_inner_exception_is_an_exception_line() {
     assert!(is(" ---> System.IO.IOException: The disk is full"));
@@ -473,6 +508,57 @@ fn indented_path_that_is_not_a_go_file_is_not_a_go_frame() {
 fn word_goroutine_without_a_number_and_state_is_not_a_goroutine_header() {
     assert!(!is("goroutine leak detected in worker pool"));
     assert!(!is("goroutine 12 finished"));
+}
+
+/// Go writes every argument of a function in hex, so a call with other arguments, a
+/// Java frame without its `at` among them, isn't a Go function line.
+#[test]
+fn call_with_other_arguments_is_not_a_go_function_line() {
+    assert!(!is("order.close(42)"));
+    assert!(!is("com.example.App.run(App.java:12)"));
+    assert!(!is("Started App in 2.1s (process running for 2.4)"));
+}
+
+#[test]
+fn created_by_in_a_sentence_is_not_a_go_created_by_line() {
+    assert!(!is("created by admin in the back office"));
+}
+
+/// After `created by` comes a function and, at most, ` in goroutine N`.
+#[test]
+fn created_by_with_something_else_is_not_a_go_created_by_line() {
+    assert!(!is("created by everyone"));
+    assert!(!is("created by main.main extra"));
+    assert!(!is("created by main.main in goroutine "));
+    assert!(!is("created by main.main in goroutine one"));
+}
+
+#[test]
+fn argument_without_hex_digits_after_0x_is_not_a_go_argument() {
+    assert!(!is("main.run(0x)"));
+    assert!(!is("main.run(0xg1)"));
+}
+
+#[test]
+fn receiver_that_is_not_an_identifier_is_not_a_go_receiver() {
+    assert!(!is("main.(a b).run()"));
+    assert!(!is("main.(*T#).run()"));
+}
+
+#[test]
+fn bracketed_text_that_is_not_a_signal_is_not_an_exception_line() {
+    assert!(!is("[signal handler installed]"));
+}
+
+/// A bare `foo.Bar()` or `foo.Bar(...)` on a line of its own is an accepted false
+/// positive: a per-line rule can't tell it from Go's `main.main()`.
+#[test]
+fn text_that_only_resembles_a_go_function_line_is_not_one() {
+    assert!(!is("see util.Parse(...)"));
+    assert!(!is("Done (0x1)"));
+    assert!(!is("main.run(0x1) extra"));
+    assert!(!is("a,b.c()"));
+    assert!(!is("com.Foo$Bar.run()"));
 }
 
 /// Like the Java lines, the lines of the other ecosystems count only at the start.

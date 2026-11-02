@@ -256,6 +256,140 @@ fn json_line_after_a_byte_order_mark_is_recognized() {
     assert_eq!(detect_lines(&[line]), Some(built_in("json")));
 }
 
+/// Such a line is a JSON object to detection and a logfmt line with a level and a
+/// message as well; JSON comes first.
+#[test]
+fn json_wins_a_tie_with_logfmt() {
+    let lines = repeat(&[r#"{x=1 level=info msg="Order 42 created"}"#], 5);
+    assert_eq!(detect_lines(&lines), Some(built_in("json")));
+}
+
+// --- logfmt ---
+
+const TIMESTAMP_KEYS: [&str; 7] = [
+    "@timestamp",
+    "timestamp",
+    "time",
+    "ts",
+    "@t",
+    "Timestamp",
+    "asctime",
+];
+const LEVEL_KEYS: [&str; 6] = [
+    "level",
+    "log.level",
+    "levelname",
+    "severity",
+    "@l",
+    "LogLevel",
+];
+const MESSAGE_KEYS: [&str; 7] = ["message", "msg", "event", "@m", "@mt", "Message", "log"];
+/// Keys that are no timestamp, level or message candidate, some of them close to one.
+const OTHER_KEYS: [&str; 11] = [
+    "user",
+    "status",
+    "name",
+    "caller",
+    "thread",
+    "logger",
+    "LEVEL",
+    "Msg",
+    "times",
+    "log_level",
+    "levels",
+];
+
+fn logfmt_key() -> impl Strategy<Value = &'static str> {
+    prop::sample::select([&TIMESTAMP_KEYS[..], &LEVEL_KEYS, &MESSAGE_KEYS, &OTHER_KEYS].concat())
+}
+
+/// Values bare, quoted, empty, and quoted with candidate keys inside.
+fn logfmt_value() -> impl Strategy<Value = &'static str> {
+    prop::sample::select(vec![
+        "x",
+        "42",
+        "",
+        r#""""#,
+        r#""Order 42 created""#,
+        r#""level=info msg=hi""#,
+    ])
+}
+
+/// A `.env` file, a Java `.properties` file and an `.ini` file: `key=value` lines at
+/// the start of the line, none with a timestamp or level key and a message key.
+const KEY_VALUE_FILES: [&[&str]; 3] = [
+    &[
+        "HOME=/home/app",
+        "PATH=/usr/local/bin:/usr/bin:/bin",
+        "LANG=C.UTF-8",
+        "LOG_LEVEL=debug",
+        "JAVA_OPTS=-Xmx512m",
+        "TZ=Europe/Warsaw",
+    ],
+    &[
+        "server.port=8080",
+        "spring.application.name=orders",
+        "logging.level.root=INFO",
+        "spring.datasource.url=jdbc:postgresql://db:5432/orders",
+        "management.endpoints.web.exposure.include=health,info",
+    ],
+    &[
+        "[database]",
+        "host=db",
+        "port=5432",
+        "name=orders",
+        "[logging]",
+        "level=info",
+        "file=/var/log/orders.log",
+    ],
+];
+
+#[test]
+fn key_value_files_without_log_keys_are_not_recognized() {
+    for lines in KEY_VALUE_FILES {
+        assert_eq!(detect_lines(lines), None, "{lines:?}");
+    }
+}
+
+/// A Go panic with the stacks of two goroutines, as `GOTRACEBACK=all` prints it. Each
+/// frame is a line naming the function, unindented, and a tab-indented file line.
+const GO_PANIC: [&str; 22] = [
+    "panic: runtime error: invalid memory address or nil pointer dereference",
+    "[signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0x47a8b2]",
+    "",
+    "goroutine 1 [running]:",
+    "panic({0x4a3b20?, 0xc000012345?})",
+    "\t/usr/local/go/src/runtime/panic.go:770 +0x132",
+    "main.(*Store).Get(0x0, {0x4b2f10, 0x2})",
+    "\t/app/store.go:41 +0x1d",
+    "main.Map[...]({0xc000010000, 0x3, 0x3}, 0x4b2f10)",
+    "\t/app/generic.go:9 +0x7a",
+    "net/http.HandlerFunc.ServeHTTP(0x4f6a20, {0x5c1e40, 0xc0000a2000}, 0xc0000b4000)",
+    "\t/usr/local/go/src/net/http/server.go:2171 +0x29",
+    "main.main()",
+    "\t/app/main.go:58 +0x1c5",
+    "",
+    "goroutine 7 [chan receive]:",
+    "main.worker(...)",
+    "\t/app/worker.go:20",
+    "...additional frames elided...",
+    "created by main.main in goroutine 1",
+    "\t/app/main.go:6 +0x2b",
+    "",
+];
+
+/// Two slog lines and a Go service's panic right after them, as when it crashes at
+/// start-up: every line of the trace is a continuation.
+#[test]
+fn lines_of_a_go_trace_are_left_out_of_the_score() {
+    let entries = [
+        "time=2026-10-07T12:00:00.101+02:00 level=INFO msg=starting addr=:8080",
+        "time=2026-10-07T12:00:00.250+02:00 level=INFO msg=\"connecting to store\"",
+    ];
+    let lines = [&entries[..], &GO_PANIC].concat();
+    assert_eq!(detect_lines(&lines), Some(built_in("logfmt")));
+}
+
 // --- properties ---
 
 /// What a line is, by construction.
@@ -366,6 +500,20 @@ fn with_inserted(
 }
 
 proptest! {
+    /// Which candidate keys a line has decides; their order, their values and the other
+    /// keys don't, and a key inside a quoted value is no key.
+    #[test]
+    fn logfmt_line_counts_with_a_timestamp_or_level_key_and_a_message_key(
+        pairs in prop::collection::vec((logfmt_key(), logfmt_value()), 1..6)
+    ) {
+        let line: Vec<String> = pairs.iter().map(|(key, value)| format!("{key}={value}")).collect();
+        let line = line.join(" ");
+        let has = |keys: &[&str]| pairs.iter().any(|(key, _)| keys.contains(key));
+        let counts = (has(&TIMESTAMP_KEYS) || has(&LEVEL_KEYS)) && has(&MESSAGE_KEYS);
+        let expected = counts.then(|| built_in("logfmt"));
+        prop_assert_eq!(detect_lines(&[&line]), expected, "{}", line);
+    }
+
     #[test]
     fn detection_never_panics_on_arbitrary_lines(
         lines in prop::collection::vec(prop::collection::vec(any::<u8>(), 0..100), 0..300)

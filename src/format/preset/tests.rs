@@ -1021,6 +1021,14 @@ fn logfmt_message_keeps_a_trailing_newline_escape() {
     assert_eq!(&line[head.message], r"Order 42 created\n");
 }
 
+/// Only detection asks for a timestamp or level key and a message key: in a file read
+/// as logfmt, any line that starts with a key and its `=` starts an entry.
+#[test]
+fn logfmt_line_without_log_keys_starts_an_entry() {
+    let parser = EntryParser::logfmt(message_mapping());
+    assert!(parser.parse(b"user=42 status=ok").is_some());
+}
+
 // --- properties ---
 
 fn level() -> impl Strategy<Value = String> {

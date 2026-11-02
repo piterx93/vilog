@@ -1,4 +1,8 @@
-//! Format detection on the fixture logs in `tests/fixtures`, one per preset.
+//! Format detection on the fixture logs in `tests/fixtures`: one per text preset, one
+//! per library in `json/` and `logfmt/`.
+
+use std::fs;
+use std::path::Path;
 
 use vilog::format::{Format, Mapping, detect};
 
@@ -12,10 +16,39 @@ fn detect_bytes(bytes: &[u8]) -> Option<&'static Format> {
     detect(lines(bytes))
 }
 
+/// Every fixture log with the format it is in: the text presets' own, a Logback log
+/// whose messages and configuration dump are `key=value` pairs, and every file in
+/// `json/` and `logfmt/`.
+fn every_fixture() -> Vec<(&'static Format, String)> {
+    let mut all: Vec<_> = fixtures()
+        .map(|(format, name)| (format, name.to_string()))
+        .collect();
+    all.push((built_in("logback"), "logback-key-values.log".to_string()));
+    for dir in ["json", "logfmt"] {
+        all.extend(files_in(dir).map(|name| (built_in(dir), format!("{dir}/{name}"))));
+    }
+    all
+}
+
+/// The names of the `.log` files in `tests/fixtures/<dir>`, sorted.
+fn files_in(dir: &str) -> impl Iterator<Item = String> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(dir);
+    let mut names: Vec<String> = fs::read_dir(&path)
+        .unwrap_or_else(|err| panic!("{}: {err}", path.display()))
+        .map(|entry| entry.expect("a readable directory").file_name())
+        .map(|name| name.into_string().expect("fixture names are UTF-8"))
+        .filter(|name| name.ends_with(".log"))
+        .collect();
+    names.sort();
+    names.into_iter()
+}
+
 #[test]
-fn every_fixture_is_detected_as_its_own_preset() {
-    for (preset, name) in fixtures() {
-        assert_eq!(detect_bytes(&fixture(name)), Some(preset), "{name}");
+fn every_fixture_is_detected_as_its_own_format() {
+    for (format, name) in every_fixture() {
+        assert_eq!(detect_bytes(&fixture(&name)), Some(format), "{name}");
     }
 }
 
@@ -111,14 +144,6 @@ const JSON_FIXTURES: [(&str, [Option<&str>; 5]); 11] = [
 ];
 
 #[test]
-fn every_json_fixture_is_detected_as_json() {
-    for (name, _) in JSON_FIXTURES {
-        let bytes = fixture(&format!("json/{name}.log"));
-        assert_eq!(detect_bytes(&bytes), Some(built_in("json")), "{name}");
-    }
-}
-
-#[test]
 fn every_json_fixture_maps_the_keys_its_library_writes() {
     for (name, [timestamp, level, logger, thread, message]) in JSON_FIXTURES {
         let bytes = fixture(&format!("json/{name}.log"));
@@ -134,24 +159,24 @@ fn every_json_fixture_maps_the_keys_its_library_writes() {
 }
 
 #[test]
-fn every_fixture_with_crlf_line_endings_is_detected_as_its_own_preset() {
-    for (preset, name) in fixtures() {
-        let text = String::from_utf8(fixture(name)).expect("fixtures are UTF-8");
+fn every_fixture_with_crlf_line_endings_is_detected_as_its_own_format() {
+    for (format, name) in every_fixture() {
+        let text = String::from_utf8(fixture(&name)).expect("fixtures are UTF-8");
         let crlf = text.replace('\n', "\r\n");
-        assert_eq!(detect_bytes(crlf.as_bytes()), Some(preset), "{name}");
+        assert_eq!(detect_bytes(crlf.as_bytes()), Some(format), "{name}");
     }
 }
 
 #[test]
-fn every_fixture_in_colour_is_detected_as_its_own_preset() {
-    for (preset, name) in fixtures() {
-        let bytes = fixture(name);
+fn every_fixture_in_colour_is_detected_as_its_own_format() {
+    for (format, name) in every_fixture() {
+        let bytes = fixture(&name);
         let coloured: Vec<Vec<u8>> = lines(&bytes)
             .into_iter()
             .map(|line| [b"\x1b[1;36m".as_slice(), line, b"\x1b[0m"].concat())
             .collect();
         let detection = detect(coloured.iter().map(Vec::as_slice));
-        assert_eq!(detection, Some(preset), "{name}");
+        assert_eq!(detection, Some(format), "{name}");
     }
 }
 
@@ -160,27 +185,26 @@ fn no_fixture_is_recognized_after_200_lines_of_jvm_startup_noise() {
     let noise =
         "OpenJDK 64-Bit Server VM warning: Sharing is only supported for boot loader classes\n"
             .repeat(200);
-    for (_, name) in fixtures() {
-        let bytes = [noise.as_bytes(), &fixture(name)].concat();
+    for (_, name) in every_fixture() {
+        let bytes = [noise.as_bytes(), &fixture(&name)].concat();
         let detection = detect_bytes(&bytes);
         assert_eq!(detection, None, "{name}");
     }
 }
 
-/// Traces of Python, Go, Node.js and .NET in a Java log, as when it records what a
-/// child process printed, are left out of the sample like Java's. Only the lines of a
-/// Go trace that name a function stay in, too few to tip the score.
+/// Traces of Python, Go, Node.js and .NET, as a log has them when it records what a
+/// child process printed, are left out of the sample like Java's, every line of them.
 #[test]
-fn every_fixture_with_traces_of_every_ecosystem_mixed_in_is_detected_as_its_own_preset() {
+fn every_fixture_with_traces_of_every_ecosystem_mixed_in_is_detected_as_its_own_format() {
     let traces = fixture("traces.log");
     let traces = continuation_lines(&traces);
-    for (preset, name) in fixtures() {
-        let bytes = fixture(name);
+    for (format, name) in every_fixture() {
+        let bytes = fixture(&name);
         let mixed: Vec<&[u8]> = lines(&bytes)
             .chunks(TRACE_EVERY)
             .flat_map(|chunk| [chunk, &traces].concat())
             .collect();
-        assert_eq!(detect(mixed), Some(preset), "{name}");
+        assert_eq!(detect(mixed), Some(format), "{name}");
     }
 }
 

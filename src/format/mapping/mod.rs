@@ -132,6 +132,25 @@ pub(super) fn lookup_in<'a>(syntax: Syntax, line: &'a [u8], key: &str) -> Option
     }
 }
 
+/// Whether `line` is a logfmt line detection counts (PRD §6.3): it starts an entry and
+/// has a timestamp or level key and a message key. Keys are literal and case-sensitive.
+pub(super) fn is_logfmt_log_line(line: &[u8]) -> bool {
+    if !logfmt::starts_entry(line) {
+        return false;
+    }
+    let (mut when, mut message) = (false, false);
+    for field in logfmt::fields(line) {
+        let key = field.key;
+        let is = |candidates: &[&str]| candidates.iter().any(|name| name.as_bytes() == key);
+        when = when || is(TIMESTAMP) || is(LEVEL);
+        message = message || is(MESSAGE);
+        if when && message {
+            return true;
+        }
+    }
+    false
+}
+
 /// The key each column of a JSON lines or logfmt file is read from. A column without a
 /// key is `None`; without a message key the whole line is the message. A key is one of the
 /// column's candidates as PRD §6.2 lists it, e.g. `log.level`, which a line may write
