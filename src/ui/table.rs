@@ -12,9 +12,9 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::{Theme, abbreviate, json, printable, printable_from};
+use super::{Theme, abbreviate, printable, printable_from, structured};
 use crate::app::{App, Search, ShownLine};
-use crate::format::{Column, EntryParser, Kind, Mapping, strip_ansi};
+use crate::format::{Column, EntryParser, Mapping, Syntax, strip_ansi};
 use crate::source;
 
 /// The width of the `▶` marker of the selected row.
@@ -120,8 +120,9 @@ struct Columns {
 /// for a column the format doesn't have, or the thread while it is hidden.
 struct Table {
     parser: EntryParser,
-    /// The keys of the columns, for a JSON lines file.
-    json: Option<Mapping>,
+    /// How the lines are written and the keys of the columns, for a JSON lines or
+    /// logfmt file.
+    structured: Option<(Syntax, Mapping)>,
     timestamp_format: String,
     timestamp: Option<usize>,
     level: Option<usize>,
@@ -153,7 +154,10 @@ impl Columns {
             let column = |column, width| format.has(column).then_some(width);
             Table {
                 parser,
-                json: matches!(format.kind, Kind::Json).then_some(app.settings().mapping),
+                structured: format
+                    .kind
+                    .syntax()
+                    .map(|syntax| (syntax, app.settings().mapping)),
                 timestamp_format,
                 timestamp: column(Column::Timestamp, timestamp),
                 level: column(Column::Level, LEVEL_WIDTH),
@@ -262,13 +266,13 @@ impl Table {
     /// The parts of `line` if it starts an entry, else `None`. A column the format has
     /// may still be empty in an entry.
     fn parts<'a>(&self, line: &'a [u8]) -> Option<Parts<'a>> {
-        if let Some(mapping) = &self.json {
-            let columns = mapping.text(line)?;
-            let message = json::row_message(line, &columns);
+        if let Some((syntax, mapping)) = &self.structured {
+            let columns = mapping.text(*syntax, line)?;
+            let message = structured::row_message(line, &columns);
             return Some(Parts {
                 level: String::new(),
-                thread: json::column(line, columns.thread.as_ref()),
-                logger: json::column(line, columns.logger.as_ref()),
+                thread: structured::column(line, columns.thread.as_ref()),
+                logger: structured::column(line, columns.logger.as_ref()),
                 message: 0..message.len(),
                 source: message,
             });

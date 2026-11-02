@@ -73,7 +73,7 @@ pub fn decode_into<'a>(text: &'a [u8], buffer: &'a mut Vec<u8>) -> &'a [u8] {
     buffer
 }
 
-fn append_decoded(text: &[u8], out: &mut Vec<u8>) {
+pub(super) fn append_decoded(text: &[u8], out: &mut Vec<u8>) {
     let mut rest = text;
     while let Some(backslash) = memchr(b'\\', rest) {
         out.extend_from_slice(&rest[..backslash]);
@@ -225,7 +225,7 @@ fn skip_whitespace(line: &[u8], from: usize) -> usize {
 }
 
 /// Where the string whose first byte after the opening quote is `from` closes.
-fn string_end(line: &[u8], from: usize) -> Option<usize> {
+pub(super) fn string_end(line: &[u8], from: usize) -> Option<usize> {
     let mut at = from;
     loop {
         let found = at + memchr::memchr2(b'"', b'\\', line.get(at..)?)?;

@@ -696,6 +696,87 @@ fn line_that_is_not_a_json_object_continues_the_entry_before() {
     assert_eq!(levels(&records), [Some(Level::Info), Some(Level::Error)]);
 }
 
+// --- logfmt ---
+
+fn logfmt(lines: &[&str]) -> Vec<Record> {
+    index_in(built_in("logfmt"), &log(lines))
+}
+
+/// PRD §6.7: only an unquoted number is epoch time. In quotes it is text, and text
+/// that isn't a timestamp gives none.
+#[test]
+fn logfmt_timestamp_is_epoch_time_only_without_quotes() {
+    let records = logfmt(&[
+        "time=\"1791374400123\" msg=a\n",
+        "time=1791374400123 msg=b\n",
+    ]);
+    assert_eq!(records[0].timestamp(), None);
+    assert_eq!(
+        records[1].timestamp(),
+        Some(instant("2026-10-07T12:00:00.123Z"))
+    );
+}
+
+/// A number is no level: the pino scale is for JSON lines.
+#[test]
+fn logfmt_level_is_read_by_name_with_or_without_quotes() {
+    let records = logfmt(&[
+        "level=warning msg=a\n",
+        "level=\"ERROR\" msg=b\n",
+        "level=30 msg=c\n",
+    ]);
+    assert_eq!(
+        levels(&records),
+        [Some(Level::Warn), Some(Level::Error), None]
+    );
+}
+
+#[test]
+fn logfmt_logger_span_is_the_value_inside_any_quotes() {
+    let lines = [
+        "logger=com.example.App msg=a\n",
+        "logger=\"com.example.App\" msg=b\n",
+    ];
+    let records = logfmt(&lines);
+    for (line, record) in lines.iter().zip(&records) {
+        assert_eq!(
+            record.class().map(|class| &line[class]),
+            Some("com.example.App"),
+            "{line:?}"
+        );
+    }
+}
+
+/// As in JSON lines, a line's exception is an exception candidate with a value.
+#[test]
+fn logfmt_exception_field_with_a_value_is_an_exception() {
+    let records = logfmt(&[
+        "msg=a stacktrace=\n",
+        "msg=b stacktrace=\"goroutine 1 [running]:\\nmain.main()\"\n",
+    ]);
+    let exceptions: Vec<bool> = records.iter().map(Record::has_exception).collect();
+    assert_eq!(exceptions, [false, true]);
+}
+
+/// Only a line that starts with a key and its `=` starts an entry: indented pairs,
+/// text with a pair further on and an `=` without a key continue the entry before.
+#[test]
+fn line_that_does_not_start_with_a_key_continues_the_logfmt_entry_before() {
+    let (first, indented, text, keyless, last) = (
+        "level=INFO msg=a\n",
+        "  user=42 status=ok\n",
+        "retrying with attempt=2\n",
+        "=2 more\n",
+        "level=ERROR msg=b\n",
+    );
+    let records = logfmt(&[first, indented, text, keyless, last]);
+    assert_eq!(
+        spans(&records),
+        laid_out(0, &[&[first, indented, text, keyless], &[last]])
+    );
+    assert_eq!(levels(&records), [Some(Level::Info), Some(Level::Error)]);
+}
+
 // --- files larger than 4 GiB ---
 
 const FIVE_GIB: u64 = 5 << 30;

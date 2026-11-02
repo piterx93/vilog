@@ -286,6 +286,7 @@ fn every_format_has_a_name_for_the_header() {
             "WildFly",
             "WildFly console",
             "JSON",
+            "logfmt",
             "Raw",
         ]
     );
@@ -1007,6 +1008,17 @@ fn json_line_that_is_not_an_object_does_not_start_an_entry() {
     ] {
         assert_eq!(parser.parse(line.as_bytes()), None, "{line:?}");
     }
+}
+
+/// Only Docker's json-file driver keeps the newline a line ended with; a logfmt
+/// message ending in `\n` keeps it.
+#[test]
+fn logfmt_message_keeps_a_trailing_newline_escape() {
+    let line = r#"level=info msg="Order 42 created\n""#;
+    let head = EntryParser::logfmt(message_mapping())
+        .parse(line.as_bytes())
+        .expect("a logfmt entry");
+    assert_eq!(&line[head.message], r"Order 42 created\n");
 }
 
 // --- properties ---

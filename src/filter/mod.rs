@@ -26,7 +26,7 @@ use memchr::memmem;
 use regex::bytes::CaptureLocations;
 
 use crate::format::{
-    self, EntryParser, Format, Kind, Level, Mapping, decoded_line, json::Field, strip_ansi_into,
+    self, EntryParser, Format, Level, Mapping, Syntax, decoded_line, json::Field, strip_ansi_into,
 };
 use crate::index::Record;
 use crate::matcher::Matcher;
@@ -310,8 +310,8 @@ fn evaluate<B: AsRef<[u8]> + Sync>(
     })
 }
 
-/// How a file's entries are read: its format and, for JSON lines, the keys its
-/// columns are in.
+/// How a file's entries are read: its format and, for JSON lines and logfmt, the
+/// keys its columns are in.
 #[derive(Debug, Clone, Copy)]
 pub struct Reader {
     format: &'static Format,
@@ -614,17 +614,17 @@ struct Scratch {
 /// How the first line of an entry yields its message.
 enum Reading {
     Text(EntryParser, CaptureLocations),
-    Json(Mapping),
+    Structured(Syntax, Mapping),
     /// The whole line is the message.
     Raw,
 }
 
 impl Scratch {
     fn new(reader: Reader) -> Scratch {
-        let reading = match (&reader.format.kind, reader.format.entry_parser()) {
-            (Kind::Json, _) => Reading::Json(reader.mapping),
-            (_, Some(parser)) => Reading::Text(parser, parser.locations()),
-            (_, None) => Reading::Raw,
+        let reading = match (reader.format.kind.syntax(), reader.format.entry_parser()) {
+            (Some(syntax), _) => Reading::Structured(syntax, reader.mapping),
+            (None, Some(parser)) => Reading::Text(parser, parser.locations()),
+            (None, None) => Reading::Raw,
         };
         Scratch {
             buffer: Vec::new(),
@@ -672,14 +672,16 @@ impl Check<'_> {
         let Some(search) = self.search else {
             return true;
         };
-        let json = matches!(scratch.reading, Reading::Json(_));
+        let syntax = match scratch.reading {
+            Reading::Structured(syntax, _) => Some(syntax),
+            _ => None,
+        };
         source::lines(entry).enumerate().any(|(i, line)| {
             let line = strip_ansi_into(line, &mut scratch.buffer);
-            // Only a JSON entry's first line has strings to decode.
-            let line = if json && i == 0 {
-                decoded_line(line, &mut scratch.decoded)
-            } else {
-                line
+            // Only the first line of a JSON or logfmt entry has strings to decode.
+            let line = match syntax {
+                Some(syntax) if i == 0 => decoded_line(syntax, line, &mut scratch.decoded),
+                _ => line,
             };
             search.is_match(line)
         })
@@ -712,17 +714,25 @@ impl Check<'_> {
                 let head = parser.parse_with(first, locations);
                 text.is_match(head.map_or(first, |head| &first[head.message]))
             }
-            Reading::Json(mapping) => json_matches(text, mapping, first, &mut scratch.decoded),
+            Reading::Structured(syntax, mapping) => {
+                structured_matches(text, *syntax, mapping, first, &mut scratch.decoded)
+            }
             Reading::Raw => text.is_match(first),
         };
         in_first || lines.any(|line| text.is_match(&format::strip_ansi(line)))
     }
 }
 
-/// Whether `text` matches the decoded message or exception of the JSON line `first`.
-/// A line without a message field has the whole line as its message.
-fn json_matches(text: &Matcher, mapping: &Mapping, first: &[u8], decoded: &mut Vec<u8>) -> bool {
-    let Some(columns) = mapping.text(first) else {
+/// Whether `text` matches the decoded message or exception of the JSON or logfmt line
+/// `first`. A line without a message field has the whole line as its message.
+fn structured_matches(
+    text: &Matcher,
+    syntax: Syntax,
+    mapping: &Mapping,
+    first: &[u8],
+    decoded: &mut Vec<u8>,
+) -> bool {
+    let Some(columns) = mapping.text(syntax, first) else {
         return text.is_match(first);
     };
     let mut matches = |field: &Field| text.is_match(field.text(first, decoded));

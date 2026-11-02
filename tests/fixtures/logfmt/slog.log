@@ -1,0 +1,9 @@
+time=2026-03-14T09:12:01.104+01:00 level=INFO msg=started addr=:8080
+time=2026-03-14T09:12:01.310+01:00 level=DEBUG msg="loading config" path=/etc/app/config.toml
+time=2026-03-14T09:12:02.020+01:00 level=INFO msg="order created" order_id=42 customer=Alice
+time=2026-03-14T09:12:02.512+01:00 level=INFO msg="listing orders" query="status=open limit=20"
+time=2026-03-14T09:12:03.481+01:00 level=WARN msg="slow upstream" elapsed=1.4s
+time=2026-03-14T09:12:04.775+01:00 level=ERROR msg="payment failed" err="card declined: \"insufficient funds\"" order_id=42
+time=2026-03-14T09:12:05.002+01:00 level=INFO msg="Zamówienie 43 przyjęte" order_id=43
+time=2026-03-14T09:12:06.250+01:00 level=INFO msg="" event=heartbeat
+time=2026-03-14T09:12:07.900+01:00 level=INFO msg="shutting dow

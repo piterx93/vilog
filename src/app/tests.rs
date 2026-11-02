@@ -5365,3 +5365,28 @@ fn text_filter_on_a_json_log_leaves_out_the_other_fields() {
     let app = filtered(json_app("pino.log"), text_filter("web-1"));
     assert_eq!(row_numbers(&app), Vec::<u64>::new());
 }
+
+// --- logfmt ---
+
+/// The logfmt fixture `name` read as logfmt, on a 10-line screen, with the whole file
+/// indexed.
+fn logfmt_app(name: &str) -> App {
+    let mut app = app_in(built_in("logfmt"), &test_support::logfmt_fixture(name));
+    app.resize(10);
+    app
+}
+
+/// logrus writes `\"X-Legacy\"` in its fourth message.
+#[test]
+fn text_filter_on_a_logfmt_log_matches_the_decoded_message() {
+    let app = filtered(logfmt_app("logrus.log"), text_filter(r#""X-Legacy""#));
+    assert_eq!(row_numbers(&app), [4]);
+}
+
+/// As in a text format, the text filter reads the message, not the other fields:
+/// `insufficient` is only in logrus' `error` field.
+#[test]
+fn text_filter_on_a_logfmt_log_leaves_out_the_other_fields() {
+    let app = filtered(logfmt_app("logrus.log"), text_filter("insufficient"));
+    assert_eq!(row_numbers(&app), Vec::<u64>::new());
+}

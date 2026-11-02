@@ -3529,3 +3529,98 @@ fn search_in_a_json_log_matches_and_highlights_the_decoded_text() {
                                                            ^^^^^^^^
     "#);
 }
+
+// --- logfmt ---
+
+/// Screen lines `lines` of the 80×24 screen of the logfmt fixture `name`, read as
+/// logfmt, after pressing `keys`.
+fn logfmt_screen(name: &str, keys: &[KeyEvent], lines: impl IntoIterator<Item = u16>) -> String {
+    let mut app = app_in(built_in("logfmt"), &test_support::logfmt_fixture(name));
+    let terminal = terminal_after(&mut app, keys);
+    let rows: Vec<String> = lines.into_iter().map(|y| row(&terminal, y)).collect();
+    rows.join("\n")
+}
+
+/// logrus quotes its time and its message, and Go's stack trace after the panic is
+/// folded into the last entry. The file has no logger key, so that column is empty.
+#[test]
+fn logrus_log_opens_with_timestamp_level_and_message_columns() {
+    assert_snapshot!(logfmt_screen("logrus.log", &[], 0..=8), @r#"
+    vilog ─ app.log ─ 1.3 KB ─ logfmt ─ PAUSED ●             F:1 E:1 W:1 I:3 D:1 T:1
+    ▶08:12:01.000 INFO                           Starting order service
+     08:12:02.000 DEBUG                          Connecting to database
+     08:12:03.000 INFO                           Order 42 created
+     08:12:04.000 WARN                           Deprecated header "X-Legacy" used
+     08:12:05.000 ERROR                          Payment failed
+     08:12:06.000 INFO                           Zamówienie 43 przyjęte
+     08:12:07.000 TRACE                          Cache probe
+     08:12:08.000 FATAL                          Lost connection to database [+11]
+    "#);
+}
+
+/// slog leaves the time and one-word values bare. An empty message stays empty, and
+/// the last line, cut off inside its quoted message, shows what it has. Details show
+/// the decoded message, then every other field in file order.
+#[test]
+fn slog_entry_shows_its_columns_in_the_table_and_its_fields_in_details() {
+    let mut keys = vec![char_key('j'); 5];
+    keys.push(key(KeyCode::Enter));
+    let lines = (1..=9).chain(DETAILS_LINES);
+    assert_snapshot!(logfmt_screen("slog.log", &keys, lines), @r#"
+     08:12:01.104 INFO                           started
+     08:12:01.310 DEBUG                          loading config
+     08:12:02.020 INFO                           order created
+     08:12:02.512 INFO                           listing orders
+     08:12:03.481 WARN                           slow upstream
+    ▶08:12:04.775 ERROR                          payment failed
+     08:12:05.002 INFO                           Zamówienie 43 przyjęte
+     08:12:06.250 INFO
+     08:12:07.900 INFO                           shutting dow
+    ┌ Details ─────────────────────────────────────────────────────────────────────┐
+    │ payment failed                                                               │
+    │ time: 2026-03-14T09:12:04.775+01:00                                          │
+    │ level: ERROR                                                                 │
+    │ err: card declined: "insufficient funds"                                     │
+    │ order_id: 42                                                                 │
+    │                                                                              │
+    └──────────────────────────────────────────────────────────────────────────────┘
+    "#);
+}
+
+/// A logfmt log of one INFO entry per message in `messages`, each written into the
+/// line after `msg=` as it is, a second apart from 09:12:01 UTC.
+fn logfmt_log(messages: &[&str]) -> App {
+    let log: String = messages
+        .iter()
+        .zip(1..)
+        .map(|(message, second)| {
+            format!("time=2026-03-14T09:12:{second:02}Z level=INFO msg={message}\n")
+        })
+        .collect();
+    app_in(built_in("logfmt"), log.as_bytes())
+}
+
+/// PRD §9.2: `"quoted"` finds `\"quoted\"` in the file.
+#[test]
+fn search_in_a_logfmt_log_matches_and_highlights_the_decoded_text() {
+    let mut app = logfmt_log(&[r#""user quoted twice""#, r#""user said \"quoted\" here""#]);
+    let terminal = searched_terminal(&mut app, r#""quoted""#, &[]);
+    assert_snapshot!(with_highlights(&terminal, 1..=2), @r#"
+     09:12:01.000 INFO                           user quoted twice
+    ▶09:12:02.000 INFO                           user said "quoted" here
+                                                           ^^^^^^^^
+    "#);
+}
+
+/// Only quoted values have escapes: slog leaves a Windows path bare, and its
+/// backslashes are shown and searched as written.
+#[test]
+fn search_in_a_logfmt_log_reads_bare_values_as_written() {
+    let mut app = logfmt_log(&["started", r"C:\temp\new"]);
+    let terminal = searched_terminal(&mut app, r"C:\\temp\\new", &[]);
+    assert_snapshot!(with_highlights(&terminal, 1..=2), @r"
+     09:12:01.000 INFO                           started
+    ▶09:12:02.000 INFO                           C:\temp\new
+                                                 ^^^^^^^^^^^
+    ");
+}

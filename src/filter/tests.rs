@@ -965,26 +965,49 @@ proptest! {
     }
 }
 
+/// The entries of `log`, read in `format`, in which a search for `word` finds
+/// something.
+fn searched(format: &'static Format, log: &str, word: &str) -> Vec<u32> {
+    let indexed = indexed(format, log.as_bytes());
+    let index = indexed.read().unwrap();
+    let search = Matcher::new(word, matcher::Options::default()).unwrap();
+    let all = 0..index.records.len();
+    evaluate(
+        &index,
+        reader(format),
+        &Filters::default(),
+        Some(&search),
+        all,
+        1,
+    )
+    .entries
+}
+
 /// Only the JSON format searches decoded (PRD §9.2): read in another, a line that is
 /// a JSON object is searched as written, so `"hi"` doesn't find `\"hi\"`.
 #[test]
 fn search_outside_the_json_format_matches_escapes_as_written() {
     let log = r#"{"msg":"say \"hi\""}"#.to_owned() + "\n";
     let raw = built_in("raw");
-    let indexed = indexed(raw, log.as_bytes());
-    let found = |word: &str| {
-        let search = Matcher::new(word, matcher::Options::default()).unwrap();
-        let index = indexed.read().unwrap();
-        evaluate(
-            &index,
-            reader(raw),
-            &Filters::default(),
-            Some(&search),
-            0..1,
-            1,
-        )
-        .entries
-    };
-    assert_eq!(found(r#""hi""#), Vec::<u32>::new());
-    assert_eq!(found(r#"\"hi\""#), [0]);
+    assert_eq!(searched(raw, &log, r#""hi""#), Vec::<u32>::new());
+    assert_eq!(searched(raw, &log, r#"\"hi\""#), [0]);
+}
+
+/// A banner before the first object is no JSON line, so its escapes stay as written.
+#[test]
+fn search_in_a_json_log_reads_a_line_before_the_first_object_as_written() {
+    let log = concat!(r#"say \"hi\""#, "\n", r#"{"msg":"a"}"#, "\n");
+    let json = built_in("json");
+    assert_eq!(searched(json, log, r#""hi""#), Vec::<u32>::new());
+    assert_eq!(searched(json, log, r#"\"hi\""#), [0]);
+}
+
+/// An indented line before the first entry doesn't start one, so its quoted values
+/// stay as written.
+#[test]
+fn search_in_a_logfmt_log_reads_a_line_before_the_first_entry_as_written() {
+    let log = concat!(r#"  note="say \"hi\"""#, "\n", "msg=a\n");
+    let logfmt = built_in("logfmt");
+    assert_eq!(searched(logfmt, log, r#""hi""#), Vec::<u32>::new());
+    assert_eq!(searched(logfmt, log, r#"\"hi\""#), [0]);
 }
