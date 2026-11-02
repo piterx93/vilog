@@ -23,8 +23,8 @@ use layout::Screen;
 mod abbrev;
 mod details;
 mod histogram;
-mod json;
 mod layout;
+mod structured;
 mod table;
 
 pub use abbrev::abbreviate;

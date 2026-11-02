@@ -120,4 +120,7 @@ exclude_re = [
     # The unit is shifted left 4 bits before each hex digit, which takes at most 4, so
     # OR and XOR never see two set bits in the same place.
     'src/format/json/mod\.rs:\d+:\d+: replace \| with \^ in hex_unit$',
+    # `decoded_line` only decodes a line that starts an entry, and no line after an
+    # entry's first does, or it would start the next entry.
+    "src/filter/mod\\.rs:\\d+:\\d+: replace match guard i == 0 with true in Check<'_>::finds$",
 ]

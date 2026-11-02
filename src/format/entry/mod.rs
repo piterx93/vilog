@@ -100,7 +100,9 @@ impl EntryGrouper {
 /// Whether `line` looks like part of a stack trace (PRD §6.5). Java and Node.js: a
 /// frame (`\tat …`), a cause (`Caused by: …`), omitted frames (`\t... 5 more`) or an
 /// exception header (`java.lang.IllegalStateException: …`). Python: `Traceback`, `File`
-/// and chaining lines. Go: `panic: `, `goroutine N [` and tab-indented `.go:N` frames.
+/// and chaining lines. Go: `panic: `, `goroutine N [`, tab-indented `.go:N` frames, the
+/// function line above each frame (`main.run(0xc000012345, {0x1, 0x2})`, `panic(…)`),
+/// `created by …`, `[signal SIG…: …]` and `...additional frames elided...`.
 /// .NET: ` ---> ` and the `--- End of …` markers. `line` has no line ending and is
 /// already ANSI-stripped.
 pub fn is_exception_line(line: &[u8]) -> bool {
@@ -125,5 +127,93 @@ pub fn is_exception_line(line: &[u8]) -> bool {
         ))
         .expect("the exception pattern is a valid regex")
     });
-    EXCEPTION_LINE.is_match(line)
+    EXCEPTION_LINE.is_match(line) || is_go_trace_line(line)
+}
+
+/// The Go trace lines the regex can't tell from prose. Each check starts with a byte or
+/// two that most lines fail, so ordinary lines cost next to nothing.
+fn is_go_trace_line(line: &[u8]) -> bool {
+    if let Some(rest) = line.strip_prefix(b"created by ") {
+        return is_created_by_target(rest);
+    }
+    if line.starts_with(b"[signal SIG") {
+        return line.ends_with(b"]");
+    }
+    line == b"...additional frames elided..." || is_go_function_line(line)
+}
+
+/// `main.main in goroutine 1`: a function, and since Go 1.21 the goroutine that
+/// started it.
+fn is_created_by_target(target: &[u8]) -> bool {
+    let name_len = target
+        .iter()
+        .position(|&b| b == b' ')
+        .unwrap_or(target.len());
+    let (name, rest) = target.split_at(name_len);
+    let goroutine = rest.strip_prefix(b" in goroutine ");
+    is_go_function_name(name)
+        && (rest.is_empty()
+            || goroutine.is_some_and(|id| !id.is_empty() && id.iter().all(u8::is_ascii_digit)))
+}
+
+/// `pkg.(*T).method(0xc000012345, {0x4b2f10, 0x2})`. Go prints every argument as hex
+/// words, so any other argument (`order.close(42)`, a Java frame) rules the line out.
+fn is_go_function_line(line: &[u8]) -> bool {
+    let Some(call) = line.strip_suffix(b")") else {
+        return false;
+    };
+    // Arguments hold no parentheses, so the last `(` opens them.
+    let Some(open) = call.iter().rposition(|&b| b == b'(') else {
+        return false;
+    };
+    let (name, arguments) = (&call[..open], &call[open + 1..]);
+    is_go_function_name(name)
+        && arguments
+            .split(|b| matches!(b, b' ' | b',' | b'{' | b'}'))
+            .all(is_go_argument)
+}
+
+fn is_go_argument(word: &[u8]) -> bool {
+    let word = word.strip_suffix(b"?").unwrap_or(word);
+    let hex = word.strip_prefix(b"0x");
+    word.is_empty()
+        || word == b"..."
+        || hex.is_some_and(|digits| !digits.is_empty() && digits.iter().all(u8::is_ascii_hexdigit))
+}
+
+/// A qualified function name, with a `(*T)` receiver and `[...]` type arguments, or
+/// the built-in `panic`.
+fn is_go_function_name(name: &[u8]) -> bool {
+    if name == b"panic" {
+        return true;
+    }
+    let mut rest = name;
+    let mut qualified = false;
+    while let Some((&byte, tail)) = rest.split_first() {
+        rest = tail;
+        match byte {
+            b'.' => qualified = true,
+            b'(' => {
+                // The receiver: `(*Entry)`.
+                let Some(close) = rest.iter().position(|&b| b == b')') else {
+                    return false;
+                };
+                let receiver = &rest[..close];
+                let receiver = receiver.strip_suffix(b"[...]").unwrap_or(receiver);
+                let ident = receiver.strip_prefix(b"*").unwrap_or(receiver);
+                if ident.is_empty()
+                    || !ident
+                        .iter()
+                        .all(|&b| b.is_ascii_alphanumeric() || b == b'_')
+                {
+                    return false;
+                }
+                rest = &rest[close + 1..];
+            }
+            b'/' | b'_' | b'-' | b'[' | b']' | b'*' => {}
+            _ if byte.is_ascii_alphanumeric() || byte >= 0x80 => {}
+            _ => return false,
+        }
+    }
+    qualified
 }

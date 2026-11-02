@@ -2,7 +2,8 @@
 
 use std::borrow::Cow;
 
-use super::{BUILT_IN, Format, is_exception_line, strip_ansi};
+use super::mapping::is_logfmt_log_line;
+use super::{BUILT_IN, Format, Kind, is_exception_line, strip_ansi};
 
 #[cfg(test)]
 mod tests;
@@ -19,7 +20,8 @@ const MAX_LINES_READ: usize = 2000;
 /// lines isn't read to its end. Continuation lines in the sample, those that start
 /// with a space or a tab or are an exception line (see [`is_exception_line`]), are
 /// left out. Each format in [`BUILT_IN`](super::BUILT_IN) but `raw` scores the share
-/// of the remaining lines that start an entry in it. The best score wins if it is at
+/// of the remaining lines that start an entry in it; for logfmt a line also needs a
+/// timestamp or level key and a message key (PRD §6.3). The best score wins if it is at
 /// least 60%, ties going to the format that comes first in the table. Otherwise, and
 /// when no line remains, it is `None`.
 pub fn detect<'a>(lines: impl IntoIterator<Item = &'a [u8]>) -> Option<&'static Format> {
@@ -28,7 +30,11 @@ pub fn detect<'a>(lines: impl IntoIterator<Item = &'a [u8]>) -> Option<&'static 
         .iter()
         .filter_map(|format| Some((format, format.entry_parser()?)))
         .map(|(format, parser)| {
-            let entries = scored.iter().filter(|line| parser.parse(line).is_some());
+            let starts_entry = |line: &&Cow<[u8]>| match format.kind {
+                Kind::Logfmt => is_logfmt_log_line(line),
+                _ => parser.parse(line).is_some(),
+            };
+            let entries = scored.iter().filter(starts_entry);
             (format, entries.count())
         })
         // `max_by_key` keeps the last of equal maximums; reversed, that is the first

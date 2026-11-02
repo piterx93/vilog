@@ -1,0 +1,19 @@
+time="2026-03-14T09:12:01+01:00" level=info msg="Starting order service" version=1.8.2
+time="2026-03-14T09:12:02+01:00" level=debug msg="Connecting to database" dsn="postgres://orders@db:5432/orders?sslmode=disable"
+time="2026-03-14T09:12:03+01:00" level=info msg="Order 42 created" coupon= customer=Alice order_id=42
+time="2026-03-14T09:12:04+01:00" level=warning msg="Deprecated header \"X-Legacy\" used" header=X-Legacy path=/orders
+time="2026-03-14T09:12:05+01:00" level=error msg="Payment failed" error="card declined: \"insufficient funds\"" order_id=42
+time="2026-03-14T09:12:06+01:00" level=info msg="Zamówienie 43 przyjęte" order_id=43
+time="2026-03-14T09:12:07+01:00" level=trace msg="Cache probe" key="order:43"
+time="2026-03-14T09:12:08+01:00" level=panic msg="Lost connection to database" db=orders
+panic: (*logrus.Entry) 0xc0001b20e0
+
+goroutine 1 [running]:
+github.com/sirupsen/logrus.(*Entry).log(0xc0001b2000, 0x0, {0xc00001c0a0, 0x1b})
+	/go/pkg/mod/github.com/sirupsen/logrus@v1.9.3/entry.go:260 +0x4b1
+github.com/sirupsen/logrus.(*Entry).Log(0xc0001b2000, 0x0, {0xc000109f18?, 0x1?, 0x1?})
+	/go/pkg/mod/github.com/sirupsen/logrus@v1.9.3/entry.go:304 +0x4f
+github.com/sirupsen/logrus.(*Entry).Panic(...)
+	/go/pkg/mod/github.com/sirupsen/logrus@v1.9.3/entry.go:342
+main.main()
+	/app/main.go:58 +0x1c5

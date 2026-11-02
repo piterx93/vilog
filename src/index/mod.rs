@@ -18,8 +18,8 @@ use jiff::tz::TimeZone;
 use memchr::memchr;
 
 use crate::format::{
-    Anchor, DatesBackward, EntryGrouper, EntryHead, EntryParser, Format, JsonColumns, Kind, Level,
-    LogTime, Mapping, strip_ansi_into,
+    Anchor, DatesBackward, EntryGrouper, EntryHead, EntryParser, Format, Level, LogTime, Mapping,
+    StructuredColumns, Syntax, strip_ansi_into,
 };
 use crate::source;
 
@@ -43,7 +43,7 @@ pub struct Settings {
     /// Where dating a time-only preset's entries starts (see
     /// [`Anchor::for_file`]). Other presets don't use it.
     pub anchor: Anchor,
-    /// Which keys a JSON lines file's columns are read from, as
+    /// Which keys a JSON lines or logfmt file's columns are read from, as
     /// [`Mapping::choose`] picks them from the file. Other formats don't use it.
     pub mapping: Mapping,
 }
@@ -295,9 +295,9 @@ fn first_line_start(bytes: &[u8], range: &Range<usize>) -> usize {
 /// Groups the lines of one chunk into entries and keeps a record of each.
 struct ChunkReader<'a> {
     zone: &'a TimeZone,
-    /// The mapping of a JSON lines file, whose entries carry their own exception
-    /// field and no columns the grouper finds.
-    json: Option<&'a Mapping>,
+    /// How a JSON lines or logfmt file is read, whose entries carry their columns in
+    /// fields the grouper doesn't find.
+    structured: Option<(Syntax, &'a Mapping)>,
     parser: Option<EntryParser>,
     time_only: bool,
     grouper: EntryGrouper,
@@ -311,7 +311,11 @@ impl<'a> ChunkReader<'a> {
         let parser = settings.format.entry_parser();
         ChunkReader {
             zone: &settings.zone,
-            json: matches!(settings.format.kind, Kind::Json).then_some(&settings.mapping),
+            structured: settings
+                .format
+                .kind
+                .syntax()
+                .map(|syntax| (syntax, &settings.mapping)),
             parser,
             time_only: parser.is_some_and(|parser| !parser.has_date()),
             grouper: EntryGrouper::new(settings.format),
@@ -332,16 +336,22 @@ impl<'a> ChunkReader<'a> {
         // A line that closes an entry opens the next, and the first line opens one.
         let opens = closed.is_some() || self.chunk.records.is_empty();
         if let Some(closed) = closed {
-            // In JSON lines the entry's own exception field decides, not what its
-            // continuation lines look like.
-            self.chunk
-                .close(offset, self.json.is_none() && closed.has_exception);
+            self.chunk.close(
+                offset,
+                continuation_exception(
+                    self.structured.map(|(syntax, _)| syntax),
+                    closed.has_exception,
+                ),
+            );
         }
         if let Some(open) = self.grouper.open_entry()
             && opens
         {
-            let (mut record, time) = match (self.json, self.parser.zip(open.head.as_ref())) {
-                (Some(mapping), Some(_)) => (read_json(offset, line, mapping, self.zone), None),
+            let (mut record, time) = match (self.structured, self.parser.zip(open.head.as_ref())) {
+                (Some((syntax, mapping)), Some(_)) => (
+                    read_structured(offset, line, syntax, mapping, self.zone),
+                    None,
+                ),
                 (None, Some((parser, head))) => read_head(offset, line, head, parser, self.zone),
                 _ => (Record::new(offset), None),
             };
@@ -359,8 +369,13 @@ impl<'a> ChunkReader<'a> {
     /// The chunk, once the last line, which ends at `end`, is pushed.
     fn finish(mut self, end: u64) -> Chunk {
         if let Some(open) = self.grouper.open_entry() {
-            self.chunk
-                .close(end, self.json.is_none() && open.has_exception);
+            self.chunk.close(
+                end,
+                continuation_exception(
+                    self.structured.map(|(syntax, _)| syntax),
+                    open.has_exception,
+                ),
+            );
         }
         let timestamps = self
             .chunk
@@ -370,6 +385,13 @@ impl<'a> ChunkReader<'a> {
         carry_forward(timestamps, NO_TIMESTAMP);
         self.chunk
     }
+}
+
+/// Whether an entry whose continuation lines look like an exception (`looks_like_one`)
+/// has one. In JSON lines the entry's own exception field decides instead; a logfmt
+/// line has such a field too, but Go prints a panic's trace after the entry.
+fn continuation_exception(syntax: Option<Syntax>, looks_like_one: bool) -> bool {
+    looks_like_one && syntax.is_none_or(|syntax| syntax == Syntax::Logfmt)
 }
 
 /// The record of an entry that starts at `offset` with `line`, ANSI-stripped, whose
@@ -400,14 +422,21 @@ fn read_head(
     (record, time)
 }
 
-/// The record of a JSON line that starts at `offset`; `line` is ANSI-stripped.
-fn read_json(offset: u64, line: &[u8], mapping: &Mapping, zone: &TimeZone) -> Record {
-    let JsonColumns {
+/// The record of a JSON or logfmt line that starts at `offset`; `line` is
+/// ANSI-stripped.
+fn read_structured(
+    offset: u64,
+    line: &[u8],
+    syntax: Syntax,
+    mapping: &Mapping,
+    zone: &TimeZone,
+) -> Record {
+    let StructuredColumns {
         timestamp,
         level,
         logger,
         has_exception,
-    } = mapping.read(line, zone);
+    } = mapping.read(syntax, line, zone);
     let mut record = Record::new(offset);
     record.timestamp = timestamp.map_or(NO_TIMESTAMP, Timestamp::as_microsecond);
     record.level = level;

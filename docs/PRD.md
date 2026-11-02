@@ -165,7 +165,7 @@ One JSON object per line, as written by logstash-logback-encoder, ECS loggers, z
 | Go `slog` TextHandler | `time=2026-10-07T12:00:00.123+02:00 level=INFO msg="Order 42 created" order_id=42` |
 | logrus text formatter | `time="2026-10-07T12:00:00+02:00" level=info msg="Order 42 created"` |
 
-Columns come from the same candidate keys and the same per-file mapping as JSON (§6.2). A line counts as logfmt only when it has a recognised timestamp or level key and a message key, so a `key=value` inside a Java message doesn't make a file logfmt.
+Columns come from the same candidate keys and the same per-file mapping as JSON (§6.2). For detection (§6.4), a line counts as logfmt only when it has a recognised timestamp or level key and a message key, so a `key=value` inside a Java message doesn't make a file logfmt. Once a file is read as logfmt, any line that starts with a `key=` starts an entry.
 
 ### 6.4 Auto-detection
 
@@ -185,7 +185,7 @@ Columns come from the same candidate keys and the same per-file mapping as JSON 
   |---|---|
   | Java | `^\s+at `, `^Caused by: `, `^\s+\.\.\. \d+ (more\|common frames omitted)`, a `^[\w.$]+(Exception\|Error)(: \|$)` header |
   | Python | `Traceback (most recent call last):`, `  File "…", line N`, `During handling of the above exception…`, `The above exception was the direct cause…` |
-  | Go | `panic: `, `goroutine N [`, tab-indented frames `\t/…/file.go:N` |
+  | Go | `panic: `, `goroutine N [`, tab-indented frames `\t/…/file.go:N`, the function line above a frame (`main.run(0xc000012345, {…})`, `panic({…})`; arguments only hex words (optionally ending in `?`), `{…}` or `...`), `created by pkg.fn [in goroutine N]`, `[signal SIG…: …]`, `...additional frames elided...` |
   | Node.js | `^\s+at ` and the `…Error: ` header, as for Java |
   | .NET | `^\s+at `, ` ---> `, `--- End of inner exception stack trace ---`, `--- End of stack trace from previous location ---` |
 

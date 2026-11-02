@@ -5,10 +5,10 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, BorderType, Padding, Paragraph};
 
-use super::json;
+use super::structured;
 use super::table::{text, wrap};
 use crate::app::{App, Focus};
-use crate::format::{Kind, strip_ansi};
+use crate::format::strip_ansi;
 use crate::source;
 
 pub(super) fn render(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -63,12 +63,12 @@ fn entry_head(app: &App, entry: &[u8]) -> Vec<String> {
     if let Some(first) = lines.next() {
         let first = strip_ansi(first);
         let settings = app.settings();
-        let columns = match settings.format.kind {
-            Kind::Json => settings.mapping.text(&first),
-            _ => None,
-        };
-        if let Some(columns) = columns {
-            shown.extend(json::details(&first, &columns));
+        let structured = settings.format.kind.syntax().and_then(|syntax| {
+            let columns = settings.mapping.text(syntax, &first)?;
+            Some((syntax, columns))
+        });
+        if let Some((syntax, columns)) = structured {
+            shown.extend(structured::details(syntax, &first, &columns));
         } else {
             match parser.parse(&first) {
                 Some(head) => {

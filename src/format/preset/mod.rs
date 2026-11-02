@@ -10,8 +10,8 @@ use clap::builder::PossibleValue;
 use jiff::tz::TimeZone;
 use regex::bytes::{CaptureLocations, Regex};
 
-use crate::format::mapping::{lookup, object};
-use crate::format::{LogTime, Mapping, time};
+use crate::format::mapping::lookup_in;
+use crate::format::{LogTime, Mapping, Syntax, time};
 
 #[cfg(test)]
 mod tests;
@@ -35,6 +35,9 @@ pub enum Kind {
     /// One JSON object per line; which keys are the columns is chosen per file, see
     /// [`Mapping`].
     Json,
+    /// `key=value` pairs, one entry per line that starts with a key and its `=`; the
+    /// columns come from the keys a [`Mapping`] chooses, as for [`Json`](Kind::Json).
+    Logfmt,
     /// No structure: every line is an entry of its own.
     Raw,
 }
@@ -64,6 +67,7 @@ pub struct Layout {
 /// - `wildfly-console`, WildFly on the console, time only and often coloured:
 ///   `12:00:00,123 INFO  [org.jboss.as] (MSC service thread 1-2) WFLYSRV0049: starting`
 /// - `json`, one JSON object per line: `{"time":"2026-10-07T12:00:00.123Z","level":"INFO","msg":"Started"}`
+/// - `logfmt`, `key=value` pairs: `time=2026-10-07T12:00:00.123Z level=INFO msg=Started`
 /// - `raw`, no structure: every line is an entry of its own.
 pub static BUILT_IN: &[Format] = &[
     text("logback", "Logback", &LOGBACK, true),
@@ -81,6 +85,11 @@ pub static BUILT_IN: &[Format] = &[
         id: "json",
         name: "JSON",
         kind: Kind::Json,
+    },
+    Format {
+        id: "logfmt",
+        name: "logfmt",
+        kind: Kind::Logfmt,
     },
     Format {
         id: "raw",
@@ -122,6 +131,17 @@ pub enum Column {
     Logger,
 }
 
+impl Kind {
+    /// How the lines of a structured format write their fields; `None` for text.
+    pub fn syntax(&self) -> Option<Syntax> {
+        match self {
+            Kind::Json => Some(Syntax::Json),
+            Kind::Logfmt => Some(Syntax::Logfmt),
+            Kind::Regex(_) | Kind::Raw => None,
+        }
+    }
+}
+
 impl Format {
     /// Whether the format's entries have `column`. The table leaves out the columns
     /// a format doesn't have.
@@ -129,7 +149,7 @@ impl Format {
         match &self.kind {
             Kind::Regex(layout) => layout.pattern.groups.has(column),
             // Which columns a file has depends on its mapping.
-            Kind::Json => true,
+            Kind::Json | Kind::Logfmt => true,
             Kind::Raw => false,
         }
     }
@@ -151,6 +171,7 @@ impl Format {
                 },
             }),
             Kind::Json => Some(EntryParser::json(Mapping::default())),
+            Kind::Logfmt => Some(EntryParser::logfmt(Mapping::default())),
             Kind::Raw => None,
         }
     }
@@ -201,7 +222,7 @@ enum Source {
         // Forced once here, so that `parse` doesn't go through the LazyLock on every line.
         pattern: &'static EntryPattern,
     },
-    Json(Mapping),
+    Structured(Syntax, Mapping),
 }
 
 impl EntryParser {
@@ -212,7 +233,17 @@ impl EntryParser {
     /// escape, and the whole line when the line or the mapping has no message key.
     pub fn json(mapping: Mapping) -> EntryParser {
         EntryParser {
-            source: Source::Json(mapping),
+            source: Source::Structured(Syntax::Json, mapping),
+        }
+    }
+
+    /// The parser of logfmt lines read with `mapping`. A line that starts with a key
+    /// and its `=` at its first byte starts an entry; any other line continues one.
+    /// The message is the value of the mapped message key, between its quotes if it
+    /// has them, and the whole line when the line or the mapping has no message key.
+    pub fn logfmt(mapping: Mapping) -> EntryParser {
+        EntryParser {
+            source: Source::Structured(Syntax::Logfmt, mapping),
         }
     }
 
@@ -231,8 +262,8 @@ impl EntryParser {
     pub(crate) fn locations(self) -> CaptureLocations {
         match self.source {
             Source::Text { pattern, .. } => pattern.regex.capture_locations(),
-            // JSON lines have no regex groups to find.
-            Source::Json(_) => NO_GROUPS.capture_locations(),
+            // Structured lines have no regex groups to find.
+            Source::Structured(..) => NO_GROUPS.capture_locations(),
         }
     }
 
@@ -247,7 +278,7 @@ impl EntryParser {
     ) -> Option<EntryHead> {
         match self.source {
             Source::Text { pattern, .. } => parse_text(pattern, line, locations),
-            Source::Json(mapping) => parse_json(mapping, line),
+            Source::Structured(syntax, mapping) => parse_structured(syntax, mapping, line),
         }
     }
 
@@ -256,7 +287,7 @@ impl EntryParser {
     pub fn has_date(self) -> bool {
         match self.source {
             Source::Text { layout, .. } => layout.has_date,
-            Source::Json(_) => true,
+            Source::Structured(..) => true,
         }
     }
 
@@ -307,21 +338,21 @@ fn end_before_newline_escape(text: &[u8]) -> usize {
     }
 }
 
-fn parse_json(mapping: Mapping, line: &[u8]) -> Option<EntryHead> {
-    let at = object(line)?;
-    let object = &line[at..];
-    let message =
-        mapping
-            .message
-            .and_then(|key| lookup(object, key))
-            .map_or(0..line.len(), |field| {
-                let end = if field.string {
-                    end_before_newline_escape(&object[..field.value.end])
-                } else {
-                    field.value.end
-                };
-                field.value.start + at..end + at
-            });
+fn parse_structured(syntax: Syntax, mapping: Mapping, line: &[u8]) -> Option<EntryHead> {
+    let at = syntax.start(line)?;
+    let body = &line[at..];
+    let message = mapping
+        .message
+        .and_then(|key| lookup_in(syntax, body, key))
+        .map_or(0..line.len(), |field| {
+            // Docker's json-file driver is the only one to keep the newline.
+            let end = if field.string && syntax == Syntax::Json {
+                end_before_newline_escape(&body[..field.value.end])
+            } else {
+                field.value.end
+            };
+            field.value.start + at..end + at
+        });
     Some(EntryHead {
         timestamp: None,
         level: None,

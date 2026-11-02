@@ -268,8 +268,19 @@ pub fn wait_for_search(app: &mut App) {
 
 /// The bytes of the JSON lines fixture `tests/fixtures/json/<name>`.
 pub fn json_fixture(name: &str) -> Vec<u8> {
+    fixture("json", name)
+}
+
+/// The bytes of the logfmt fixture `tests/fixtures/logfmt/<name>`.
+pub fn logfmt_fixture(name: &str) -> Vec<u8> {
+    fixture("logfmt", name)
+}
+
+/// The bytes of the fixture `tests/fixtures/<dir>/<name>`.
+fn fixture(dir: &str, name: &str) -> Vec<u8> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/json")
+        .join("tests/fixtures")
+        .join(dir)
         .join(name);
     fs::read(&path).unwrap_or_else(|err| panic!("{}: {err}", path.display()))
 }
